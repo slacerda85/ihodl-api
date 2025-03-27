@@ -9,14 +9,9 @@ import { TLSSoquetRequest } from '@/models/rpc'
 import { randomUUID } from 'crypto'
 
 export const peers: ConnectionOptions[] = [
-  { host: 'guichet.centure.cc', port: 50002, rejectUnauthorized: false },
+  { host: 'elx.bitske.com', port: 50002, rejectUnauthorized: false },
   {
     host: 'electrum.jochen-hoenucke.de',
-    port: 50002,
-    rejectUnauthorized: false,
-  },
-  {
-    host: 'electrumx.electricnewyear.net',
     port: 50002,
     rejectUnauthorized: false,
   },
