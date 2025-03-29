@@ -330,48 +330,72 @@ static async getTransactions(
 }
 
   /**
-   * Get balance for an address (corrected implementation)
-   * Balance calculation considers both incoming and outgoing transactions
-   */
-  static async getBalance(
-    address: string,
-    socket?: TLSSocket,
-  ): Promise<ElectrumResponse<number>> {
-    try {
-      // Create a socket if not provided to reuse for multiple calls
-      const managedSocket = !socket
-      const usedSocket = socket || (await this.connect())
+ * Get balance for a Bitcoin address
+ * Returns balance in BTC (not satoshis)
+ * @param address Bitcoin address to query
+ * @param socket Optional TLSSocket to reuse
+ * @returns Promise with balance in BTC
+ */
+static async getBalance(
+  address: string,
+  socket?: TLSSocket,
+): Promise<ElectrumResponse<number>> {
+  const startTime = Date.now();
+  console.log(`[ElectrumService] Getting balance for address: ${address}`);
 
+  // Create a socket if not provided to reuse for multiple calls
+  const managedSocket = !socket;
+  let usedSocket: TLSSocket | null = null;
+
+  try {
+    usedSocket = socket || await this.connect();
+    console.log(`[ElectrumService] Connected to Electrum server${managedSocket ? ' (new connection)' : ' (reusing connection)'}`);
+
+    // Get the scripthash for the address
+    const scripthash = this.addressToScriptHash(address);
+    console.log(`[ElectrumService] Converted address to scripthash: ${scripthash}`);
+
+    // Use blockchain.scripthash.get_balance for direct balance calculation
+    // This is more efficient than manually iterating through transactions
+    console.log(`[ElectrumService] Fetching balance for scripthash: ${scripthash}`);
+    const balanceData = await this.callElectrumMethod<{
+      confirmed: number;
+      unconfirmed: number;
+    }>('blockchain.scripthash.get_balance', [scripthash], usedSocket);
+
+    // Convert from satoshis to BTC
+    const confirmedSats = balanceData.result?.confirmed || 0;
+    const unconfirmedSats = balanceData.result?.unconfirmed || 0;
+    const totalSats = confirmedSats + unconfirmedSats;
+    const balance = totalSats / 100000000;
+
+    console.log(
+      `[ElectrumService] Balance retrieved: ${balance} BTC ` +
+      `(${confirmedSats} confirmed sats, ${unconfirmedSats} unconfirmed sats)`
+    );
+
+    const totalTime = Date.now() - startTime;
+    console.log(`[ElectrumService] getBalance completed in ${totalTime}ms`);
+
+    return {
+      result: balance,
+      error: null,
+      id: balanceData.id,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[ElectrumService] Error fetching balance for address ${address}: ${errorMsg}`, error);
+    throw new Error(`Failed to fetch balance: ${errorMsg}`);
+  } finally {
+    // Close socket if we created it
+    if (managedSocket && usedSocket) {
       try {
-        // Get the scripthash for the address
-        const scripthash = this.addressToScriptHash(address)
-
-        // Use blockchain.scripthash.get_balance for direct balance calculation
-        // This is more efficient than manually iterating through transactions
-        const balanceData = await this.callElectrumMethod<{
-          confirmed: number
-          unconfirmed: number
-        }>('blockchain.scripthash.get_balance', [scripthash], usedSocket)
-
-        // Convert from satoshis to BTC
-        const balance =
-          (balanceData.result.confirmed + balanceData.result.unconfirmed) /
-          100000000
-
-        return {
-          result: balance,
-          error: null,
-          id: balanceData.id,
-        }
-      } finally {
-        // Close socket if we created it
-        if (managedSocket && usedSocket) {
-          this.close(usedSocket)
-        }
+        console.log('[ElectrumService] Closing managed socket connection');
+        this.close(usedSocket);
+      } catch (closeError) {
+        console.error('[ElectrumService] Error closing socket:', closeError);
       }
-    } catch (error) {
-      console.error('Erro ao buscar saldo do endereço:', error)
-      throw error
     }
   }
+}
 }
