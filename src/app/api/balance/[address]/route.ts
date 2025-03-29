@@ -1,4 +1,4 @@
-import { getTransactions } from '@/services/transactions.service'
+import { getBalance } from '@/services/transactions.service'
 
 export async function GET(
   _request: Request,
@@ -6,6 +6,6 @@ export async function GET(
 ) {
   const { address } = await params
 
-  const response = await getTransactions(address)
+  const response = await getBalance(address)
   return Response.json(response)
 }

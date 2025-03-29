@@ -23,19 +23,41 @@ export const peers: ConnectionOptions[] = [
 
 export default class ElectrumService {
   // Connect to an Electrum server and return the socket
-  static connect(): Promise<TLSSocket> {
-    return new Promise((resolve, reject) => {
-      const selectedPeer = peers[Math.floor(Math.random() * peers.length)]
-      const socket = tls.connect(selectedPeer, () => {
-        resolve(socket)
-      })
+static async connect(): Promise<TLSSocket> {
+  let lastError: Error | null | unknown = null;
 
-      socket.on('error', err => {
-        console.error(`Erro ao conectar ao servidor Electrum:`, err)
-        reject(err)
-      })
-    })
+  // Try connecting to peers one by one
+  for (let i = 0; i < peers.length; i++) {
+    const peer = peers[i];
+    console.log(`[ElectrumService] Attempting to connect to Electrum server: ${peer.host}:${peer.port} (${i+1}/${peers.length})`);
+    
+    try {
+      // Create a promise for this specific connection attempt
+      const socket = await new Promise<TLSSocket>((resolve, reject) => {
+        const socket = tls.connect(peer, () => {
+          resolve(socket);
+        });
+
+        socket.on('error', err => {
+          console.error(`[ElectrumService] Connection failed to ${peer.host}:${peer.port}: ${err.message}`);
+          if (!socket.destroyed) {
+            socket.destroy();
+          }
+          reject(err);
+        });
+      });
+      
+      console.log(`[ElectrumService] Successfully connected to ${peer.host}:${peer.port}`);
+      return socket;
+    } catch (error) {
+      lastError = error;
+      // Continue to next peer
+    }
   }
+  
+  // If we get here, all peers failed
+  throw new Error(`Failed to connect to any Electrum server after trying all available peers. Last error: ${lastError || 'Unknown error'}`);
+}
 
   // Close a socket connection
   static close(socket: TLSSocket): void {
@@ -199,60 +221,113 @@ export default class ElectrumService {
     }
   }
   /**
-   * Get all transactions for an address
-   */
-  static async getTransactions(
-    address: string,
-    socket?: TLSSocket,
-  ): Promise<Tx[]> {
-    const MINIMUN_CONFIRMATIONS = 3
+ * Get all transactions for an address with minimum confirmations
+ * Uses parallel processing with controlled batch sizes for efficiency
+ * @param address Bitcoin address to query
+ * @param socket Optional TLSSocket to reuse
+ * @param minConfirmations Minimum number of confirmations required (default: 3)
+ * @param batchSize Number of transaction requests to process in parallel (default: 10)
+ */
+static async getTransactions(
+  address: string,
+  socket?: TLSSocket,
+  minConfirmations = 3,
+  batchSize = 10,
+): Promise<Tx[]> {
+  const startTime = Date.now();
+  console.log(`[ElectrumService] Getting transactions for address: ${address}`);
 
-    try {
-      // Create a socket if not provided to reuse for multiple calls
-      const managedSocket = !socket
-      const usedSocket = socket || (await this.connect())
+  // Create a socket if not provided to reuse for multiple calls
+  const managedSocket = !socket;
+  let usedSocket: TLSSocket | null = null;
 
-      try {
-        // Get transaction history for address
-        const historyResponse = await this.getAddressTxHistory(
-          address,
-          usedSocket,
+  try {
+    usedSocket = socket || await this.connect();
+    console.log(`[ElectrumService] Connected to Electrum server${managedSocket ? ' (new connection)' : ' (reusing connection)'}`);
+
+    // Get transaction history for address
+    console.log(`[ElectrumService] Fetching transaction history for address: ${address}`);
+    const historyResponse = await this.getAddressTxHistory(address, usedSocket);
+    const history = historyResponse.result || [];
+    
+    if (!history.length) {
+      console.log(`[ElectrumService] No transaction history found for address: ${address}`);
+      return [];
+    }
+    
+    console.log(`[ElectrumService] Found ${history.length} transactions in history, retrieving details...`);
+
+    // Process transactions in batches to avoid overwhelming the connection
+    const transactions: Tx[] = [];
+    const errors: {txHash: string, error: Error}[] = [];
+    
+    // Process history in batches
+    for (let i = 0; i < history.length; i += batchSize) {
+      const batchStartTime = Date.now();
+      const batch = history.slice(i, i + batchSize);
+      console.log(`[ElectrumService] Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(history.length/batchSize)} (${batch.length} transactions)`);
+      
+      const results = await Promise.allSettled(
+        batch.map(({ tx_hash }) => 
+          this.getTransaction(tx_hash, true, usedSocket!)
+          .then(response => ({ hash: tx_hash, data: response.result }))
         )
-        const history = historyResponse.result
-
-        // Fetch full transaction details for each transaction in history
-        const transactions: Tx[] = []
-
-        for (const { tx_hash } of history) {
-          const txResponse = await this.getTransaction(
-            tx_hash,
-            true,
-            usedSocket,
-          )
-
-          const tx = txResponse.result
-          const confirmations = tx.confirmations || 0
-
-          // Filter out unconfirmed transactions
-          if (confirmations < MINIMUN_CONFIRMATIONS) {
-            continue
+      );
+      
+      // Process results from this batch
+      results.forEach((result, index) => {
+        const txHash = batch[index].tx_hash;
+        
+        if (result.status === 'fulfilled') {
+          const tx = result.value.data;
+          const confirmations = tx.confirmations || 0;
+          
+          if (confirmations >= minConfirmations) {
+            transactions.push(tx);
+          } else {
+            console.log(`[ElectrumService] Skipping transaction ${txHash} with only ${confirmations} confirmations`);
           }
-
-          transactions.push(tx)
+        } else {
+          console.error(`[ElectrumService] Failed to fetch transaction ${txHash}:`, result.reason);
+          errors.push({ txHash, error: result.reason });
         }
+      });
+      
+      console.log(`[ElectrumService] Batch processed in ${Date.now() - batchStartTime}ms`);
+    }
 
-        return transactions
-      } finally {
-        // Close socket if we created it
-        if (managedSocket && usedSocket) {
-          this.close(usedSocket)
-        }
+    const successRate = history.length ? ((history.length - errors.length) / history.length) * 100 : 100;
+    console.log(
+      `[ElectrumService] Processed ${history.length} transactions with ${errors.length} errors ` +
+      `(${successRate.toFixed(2)}% success rate)`
+    );
+    console.log(`[ElectrumService] Returning ${transactions.length} confirmed transactions`);
+    
+    if (errors.length > 0) {
+      console.warn(`[ElectrumService] ${errors.length} transactions failed to fetch:`, 
+        errors.map(e => e.txHash).join(', '));
+    }
+
+    const totalTime = Date.now() - startTime;
+    console.log(`[ElectrumService] getTransactions completed in ${totalTime}ms`);
+    
+    return transactions;
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[ElectrumService] Error fetching transactions for address ${address}: ${errorMsg}`, error);
+    throw new Error(`Failed to fetch transactions: ${errorMsg}`);
+  } finally {
+    // Close socket if we created it
+    if (managedSocket && usedSocket) {
+      try {
+        console.log('[ElectrumService] Closing managed socket connection');
+        this.close(usedSocket);
+      } catch (closeError) {
+        console.error('[ElectrumService] Error closing socket:', closeError);
       }
-    } catch (error) {
-      console.error('Erro ao buscar transações do endereço:', error)
-      throw error
     }
   }
+}
 
   /**
    * Get balance for an address (corrected implementation)

@@ -6,7 +6,7 @@ export async function getTransactions(address: string) {
       await ElectrumService.getTransactions(address)
     return getTransactionsResponse
   } catch (error) {
-    throw error
+    console.log('Erro ao buscar transações do endereço:', error)
   }
 }
 

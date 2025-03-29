@@ -1,5 +1,7 @@
 import { getTransactions } from '@/services/transactions.service'
 
+export const maxDuration = 30
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ address: string }> },
