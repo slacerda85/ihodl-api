@@ -339,7 +339,7 @@ static async getTransactions(
 static async getBalance(
   address: string,
   socket?: TLSSocket,
-): Promise<ElectrumResponse<number>> {
+): Promise<number> {
   const startTime = Date.now();
   console.log(`[ElectrumService] Getting balance for address: ${address}`);
 
@@ -377,11 +377,7 @@ static async getBalance(
     const totalTime = Date.now() - startTime;
     console.log(`[ElectrumService] getBalance completed in ${totalTime}ms`);
 
-    return {
-      result: balance,
-      error: null,
-      id: balanceData.id,
-    };
+    return balance
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`[ElectrumService] Error fetching balance for address ${address}: ${errorMsg}`, error);
