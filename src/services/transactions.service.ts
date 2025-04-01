@@ -17,7 +17,7 @@ export async function getBalance(address: string) {
     if (!getTransactionsResponse) {
       
       console.log('Nenhum dado retornado para o endereço:', address)
-      return { balance: 0 } // Retorna 0 se não houver dados
+      return 0 // Retorna 0 se não houver dados de transação
     }
 
     return getTransactionsResponse
