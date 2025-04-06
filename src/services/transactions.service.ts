@@ -25,3 +25,14 @@ export async function getBalance(address: string) {
     console.log('Erro ao buscar transações do endereço:', error)
   }
 }
+
+export async function getTransactionsMultipleAddresses(addresses: string[]) {
+  try {
+    const getTransactionsResponse =
+      await ElectrumService.getTransactionsMultipleAddresses(addresses)
+    
+    return getTransactionsResponse
+  } catch (error) {
+    console.log('Erro ao buscar transações do endereço:', error)
+  }
+}

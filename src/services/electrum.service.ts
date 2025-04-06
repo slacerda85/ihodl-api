@@ -329,6 +329,25 @@ static async getTransactions(
   }
 }
 
+static async getTransactionsMultipleAddresses(
+  addresses: string[],
+  socket?: TLSSocket,
+  minConfirmations = 3,
+): Promise<Tx[]> {
+  const allTransactions: Tx[] = [];
+
+  for await (const address of addresses) {
+    try {
+      const transactions = await this.getTransactions(address, socket, minConfirmations);
+      allTransactions.push(...transactions);
+    } catch (error) {
+      console.error(`[ElectrumService] Error fetching transactions for address ${address}:`, error);
+    }
+  }
+
+  return allTransactions;
+}
+
   /**
  * Get balance for a Bitcoin address
  * Returns balance in BTC (not satoshis)
@@ -395,3 +414,4 @@ static async getBalance(
   }
 }
 }
+
